@@ -63,6 +63,8 @@ char** parseArguments(char* args) {
 }
 
 enum programState executeInput(char** args) {
+	// Checks the command the user inputted and handles what to execute accordingly
+
 	// Check if argument is null or comment
 	// If the first character in the arg is '#', it's considered a comment - midline comments not within scope of project
 	if ((args[0] == NULL || strcmp(args[0], "") == 0) || args[0][0] == '#')
@@ -84,10 +86,11 @@ enum programState executeInput(char** args) {
 void executeCd(char** args) {
 	// Handle the cd built in command
 	// Change dir to HOME environment variable if user doesn't specify directory
-	int chdirStatus = (args[1] == NULL) ? chdir(getenv("HOME")) : chdir(args[1]);
+	char* dir = (args[1] == NULL) ? getenv("HOME") : args[1];
+	int chdirStatus = chdir(dir);
 
 	if (chdirStatus != 0) {
-		printf("Directory not found: %s\n", (args[1] == NULL) ? getenv("HOME") : args[1]);
+		printf("Directory not found: %s\n", dir);
 		fflush(stdout);
 	}
 }
@@ -104,7 +107,7 @@ void executeNonBuiltInCommand(char** args) {
 			break;
 		case 0:
 			// In the child process
-			execvp(args[0], args);
+			execvp(args[0], args); // Use execvp per suggestion from instructions
 			perror("execv"); // exec will only return if there's an error
 			exit(2);
 			break;
