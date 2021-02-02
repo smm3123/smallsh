@@ -10,15 +10,22 @@
 
 // Prototypes
 enum programState;
+struct command;
 void getArguments(char* userInput);
-char** parseArguments(char* args);
-enum programState executeInput(char** args);
+struct command parseArguments(char* args);
+enum programState executeInput(struct command cmd);
 void executeCd(char** args);
-void executeNonBuiltInCommand(char** args);
+void executeNonBuiltInCommand(struct command cmd);
 
 enum programState {
 	Okay,
 	Exit
+};
+
+struct command {
+	char** arguments;
+	_Bool isInput;
+	_Bool isOutput;
 };
 
 int main() {
@@ -31,10 +38,10 @@ int main() {
 		// Get user input and parse arguments
 		char userInput[MAX_ARG_LENGTH];
 		getArguments(userInput);
-		char** args = parseArguments(userInput);
+		struct command cmd = parseArguments(userInput);
 
 		// Execute the command and arguments
-		state = executeInput(args);
+		state = executeInput(cmd);
 	}
 	return 0;
 }
@@ -45,40 +52,52 @@ void getArguments(char* userInput) {
 	userInput[strlen(userInput) - 1] = '\0';
 }
 
-char** parseArguments(char* args) {
+struct command parseArguments(char* args) {
 	// Stores each argument passed in by the user in an array index and returns the array
 	char** argsArray = malloc(MAX_ARG_LENGTH * sizeof(char*));
 	char* savePtr;
 	int counter = 0;
 
+	struct command cmd;
+	cmd.isInput = 0;
+	cmd.isOutput = 0;
+
 	char* token = strtok_r(args, " ", &savePtr);
 	while (token != NULL) {
 		argsArray[counter] = token;
+
+		// Check if input or output arguments were passed to the command
+		if (strcmp(token, ">") == 0)
+			cmd.isOutput = 1;
+		else if (strcmp(token, "<") == 0)
+			cmd.isInput = 1;
+
 		counter++;
 		token = strtok_r(NULL, " ", &savePtr);
 	}
 
 	argsArray[counter] = NULL; // Last array index will be NULL for iteration purposes
-	return argsArray;
+	cmd.arguments = argsArray;
+	return cmd;
 }
 
-enum programState executeInput(char** args) {
+enum programState executeInput(struct command cmd) {
 	// Checks the command the user inputted and handles what to execute accordingly
 
 	// Check if argument is null or comment
 	// If the first character in the arg is '#', it's considered a comment - midline comments not within scope of project
-	if ((args[0] == NULL || strcmp(args[0], "") == 0) || args[0][0] == '#')
+	if ((cmd.arguments[0] == NULL || strcmp(cmd.arguments[0], "") == 0) || cmd.arguments[0][0] == '#')
 		return Okay;
 	// exit built-in command
-	else if (strcmp(args[0], "exit") == 0)
+	else if (strcmp(cmd.arguments[0], "exit") == 0)
 		return Exit;
 	// cd built-in command
-	else if (strcmp(args[0], "cd") == 0) {
-		executeCd(args);
+	else if (strcmp(cmd.arguments[0], "cd") == 0) {
+		executeCd(cmd.arguments);
 		return Okay;
 	}
 	else {
-		executeNonBuiltInCommand(args);
+		executeNonBuiltInCommand(cmd);
 		return Okay;
 	}
 }
@@ -95,7 +114,7 @@ void executeCd(char** args) {
 	}
 }
 
-void executeNonBuiltInCommand(char** args) {
+void executeNonBuiltInCommand(struct command cmd) {
 	// Fork new process
 	int childStatus;
 	pid_t spawnPid = fork(); 
@@ -107,7 +126,7 @@ void executeNonBuiltInCommand(char** args) {
 			break;
 		case 0:
 			// In the child process
-			execvp(args[0], args); // Use execvp per suggestion from instructions
+			execvp(cmd.arguments[0], cmd.arguments); // Use execvp per suggestion from instructions
 			perror("execv"); // exec will only return if there's an error
 			exit(2);
 			break;
