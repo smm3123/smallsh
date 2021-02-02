@@ -135,44 +135,40 @@ void executeNonBuiltInCommand(struct command cmd) {
 			perror("fork()\n");
 			exit(1);
 			break;
-		case 0: // Curly braces added to introduce new local scope for i/o redirect variables
-		{
+		case 0:
 			// In the child process
-			// Handle input/output redirection
-			_Bool performRedirection;
-			int oflag;
-			int fileDescriptor;
-			int newFileDescriptor;
-			struct redirectFlag redirectFlag;
-
-			// Determine whether input or output redirect and initialize values accordingly
+			// Handle input redirection
 			if (cmd.inputFlag.isInArgument) {
-				performRedirection = 1;
-				oflag = O_RDONLY;
-				newFileDescriptor = STDIN_FILENO;
-				redirectFlag = cmd.inputFlag;
-			}
-			else if (cmd.outputFlag.isInArgument) {
-				performRedirection = 1;
-				oflag = O_WRONLY | O_CREAT | O_TRUNC;
-				newFileDescriptor = STDOUT_FILENO;
-				redirectFlag = cmd.outputFlag;
-			}
-
-			// Perform whichever redirection was specified
-			if (performRedirection) {
-				fileDescriptor = open(cmd.arguments[redirectFlag.argumentPosition + 1], oflag, 0640);
+				int fileDescriptor = open(cmd.arguments[cmd.inputFlag.argumentPosition + 1], O_RDONLY, 0640);
 				if (fileDescriptor == -1) {
-					perror("open()");
+					printf("cannot open %s for input\n", cmd.arguments[cmd.inputFlag.argumentPosition + 1]);
 					exit(2);
 				}
 				else {
-					int result = dup2(fileDescriptor, newFileDescriptor);
+					int result = dup2(fileDescriptor, STDIN_FILENO);
 					if (result == -1) {
 						perror("dup2");
 						exit(2);
 					}
-					cmd.arguments[redirectFlag.argumentPosition] = NULL; // Prevent the redirect flag from being passed as an argument during exec
+					cmd.arguments[cmd.inputFlag.argumentPosition] = NULL; // Prevent the redirect flag from being passed as an argument during exec
+					close(fileDescriptor);
+				}
+			}
+			
+			// Handle output redirection
+			if (cmd.outputFlag.isInArgument) {
+				int fileDescriptor = open(cmd.arguments[cmd.outputFlag.argumentPosition + 1], O_WRONLY | O_CREAT | O_TRUNC, 0640);
+				if (fileDescriptor == -1) {
+					printf("cannot create %s for output\n", cmd.arguments[cmd.outputFlag.argumentPosition + 1]);
+					exit(2);
+				}
+				else {
+					int result = dup2(fileDescriptor, STDOUT_FILENO);
+					if (result == -1) {
+						perror("dup2");
+						exit(2);
+					}
+					cmd.arguments[cmd.outputFlag.argumentPosition] = NULL; // Prevent the redirect flag from being passed as an argument during exec
 					close(fileDescriptor);
 				}
 			}
@@ -181,7 +177,6 @@ void executeNonBuiltInCommand(struct command cmd) {
 			perror("execv"); // exec will only return if there's an error
 			exit(2);
 			break;
-		}
 		default:
 			// In the parent process
 			spawnPid = waitpid(spawnPid, &childStatus, 0);
