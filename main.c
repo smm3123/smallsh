@@ -18,7 +18,10 @@ struct command parseArguments(char* args);
 enum programState executeInput(struct command cmd);
 void executeCd(char** args);
 void executeNonBuiltInCommand(struct command cmd);
+void handleIORedirection(struct command cmd);
+void handleRedirection(struct command cmd, int oflag, int newFileDescriptor, _Bool isInput);
 
+// Structs & enums
 enum programState {
 	Okay,
 	Exit
@@ -137,42 +140,7 @@ void executeNonBuiltInCommand(struct command cmd) {
 			break;
 		case 0:
 			// In the child process
-			// Handle input redirection
-			if (cmd.inputFlag.isInArgument) {
-				int fileDescriptor = open(cmd.arguments[cmd.inputFlag.argumentPosition + 1], O_RDONLY, 0640);
-				if (fileDescriptor == -1) {
-					printf("cannot open %s for input\n", cmd.arguments[cmd.inputFlag.argumentPosition + 1]);
-					exit(2);
-				}
-				else {
-					int result = dup2(fileDescriptor, STDIN_FILENO);
-					if (result == -1) {
-						perror("dup2");
-						exit(2);
-					}
-					cmd.arguments[cmd.inputFlag.argumentPosition] = NULL; // Prevent the redirect flag from being passed as an argument during exec
-					close(fileDescriptor);
-				}
-			}
-			
-			// Handle output redirection
-			if (cmd.outputFlag.isInArgument) {
-				int fileDescriptor = open(cmd.arguments[cmd.outputFlag.argumentPosition + 1], O_WRONLY | O_CREAT | O_TRUNC, 0640);
-				if (fileDescriptor == -1) {
-					printf("cannot create %s for output\n", cmd.arguments[cmd.outputFlag.argumentPosition + 1]);
-					exit(2);
-				}
-				else {
-					int result = dup2(fileDescriptor, STDOUT_FILENO);
-					if (result == -1) {
-						perror("dup2");
-						exit(2);
-					}
-					cmd.arguments[cmd.outputFlag.argumentPosition] = NULL; // Prevent the redirect flag from being passed as an argument during exec
-					close(fileDescriptor);
-				}
-			}
-
+			handleIORedirection(cmd);
 			execvp(cmd.arguments[0], cmd.arguments); // Use execvp per suggestion from instructions
 			perror("execv"); // exec will only return if there's an error
 			exit(2);
@@ -181,5 +149,34 @@ void executeNonBuiltInCommand(struct command cmd) {
 			// In the parent process
 			spawnPid = waitpid(spawnPid, &childStatus, 0);
 			break;
+	}
+}
+
+void handleIORedirection(struct command cmd) {
+	// Handle input redirection
+	if (cmd.inputFlag.isInArgument)
+		handleRedirection(cmd, O_RDONLY, STDIN_FILENO, 1);
+
+	// Handle output redirection
+	if (cmd.outputFlag.isInArgument)
+		handleRedirection(cmd, O_WRONLY | O_CREAT | O_TRUNC, STDOUT_FILENO, 0);
+}
+
+void handleRedirection(struct command cmd, int oflag, int newFileDescriptor, _Bool isInput) {
+	int index = isInput ? cmd.inputFlag.argumentPosition : cmd.outputFlag.argumentPosition;
+	int fileDescriptor = open(cmd.arguments[index + 1], oflag, 0640);
+	if (fileDescriptor == -1) {
+		printf("cannot %s %s for %s\n", isInput ? "open" : "create", cmd.arguments[index + 1], isInput ? "input" : "output");
+		fflush(stdout);
+		exit(2);
+	}
+	else {
+		int result = dup2(fileDescriptor, newFileDescriptor);
+		if (result == -1) {
+			perror("dup2");
+			exit(2);
+		}
+		cmd.arguments[index] = NULL; // Prevent the redirect flag from being passed as an argument during command execution
+		close(fileDescriptor);
 	}
 }
