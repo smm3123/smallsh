@@ -128,7 +128,6 @@ void executeCd(char** args) {
 void executeNonBuiltInCommand(struct command cmd) {
 	// Fork new process
 	int childStatus;
-	int fileDescriptor;
 	pid_t spawnPid = fork(); 
 	switch (spawnPid) {
 		case -1:
@@ -136,25 +135,44 @@ void executeNonBuiltInCommand(struct command cmd) {
 			perror("fork()\n");
 			exit(1);
 			break;
-		case 0:
+		case 0: // Curly braces added to introduce new local scope for i/o redirect variables
+		{
 			// In the child process
-			// First check if input/output redirection is present
-			if (cmd.inputFlag.isInArgument) {
+			// Handle input/output redirection
+			_Bool performRedirection;
+			int oflag;
+			int fileDescriptor;
+			int newFileDescriptor;
+			struct redirectFlag redirectFlag;
 
+			// Determine whether input or output redirect and initialize values accordingly
+			if (cmd.inputFlag.isInArgument) {
+				performRedirection = 1;
+				oflag = O_RDONLY;
+				newFileDescriptor = STDIN_FILENO;
+				redirectFlag = cmd.inputFlag;
 			}
 			else if (cmd.outputFlag.isInArgument) {
-				fileDescriptor = open(cmd.arguments[cmd.outputFlag.argumentPosition + 1], O_WRONLY | O_CREAT | O_TRUNC, 0640);
+				performRedirection = 1;
+				oflag = O_WRONLY | O_CREAT | O_TRUNC;
+				newFileDescriptor = STDOUT_FILENO;
+				redirectFlag = cmd.outputFlag;
+			}
+
+			// Perform whichever redirection was specified
+			if (performRedirection) {
+				fileDescriptor = open(cmd.arguments[redirectFlag.argumentPosition + 1], oflag, 0640);
 				if (fileDescriptor == -1) {
 					perror("open()");
 					exit(2);
 				}
 				else {
-					int result = dup2(fileDescriptor, 1);
+					int result = dup2(fileDescriptor, newFileDescriptor);
 					if (result == -1) {
 						perror("dup2");
 						exit(2);
 					}
-					cmd.arguments[cmd.outputFlag.argumentPosition] = NULL; // Prevent the redirect flag from being passed as an argument during exec
+					cmd.arguments[redirectFlag.argumentPosition] = NULL; // Prevent the redirect flag from being passed as an argument during exec
 					close(fileDescriptor);
 				}
 			}
@@ -163,6 +181,7 @@ void executeNonBuiltInCommand(struct command cmd) {
 			perror("execv"); // exec will only return if there's an error
 			exit(2);
 			break;
+		}
 		default:
 			// In the parent process
 			spawnPid = waitpid(spawnPid, &childStatus, 0);
