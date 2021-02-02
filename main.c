@@ -63,25 +63,25 @@ enum programState executeInput(char** args) {
 	// If the first character in the arg is '#', it's considered a comment - midline comments not within scope of project
 	if ((args[0] == NULL || strcmp(args[0], "") == 0) || args[0][0] == '#')
 		return Okay;
+	// exit built-in command
 	else if (strcmp(args[0], "exit") == 0)
 		return Exit;
+	// cd built-in command
 	else if (strcmp(args[0], "cd") == 0) {
 		executeCd(args);
 		return Okay;
 	}
-
 	else
 		return Okay;
 }
 
 void executeCd(char** args) {
-	if (args[1] == NULL)
-		chdir(getenv("HOME")); // Change to dir specified in HOME environment variable
-	else {
-		int chdirStatus = chdir(args[1]); // Change dir to value entered by user
-		if (chdirStatus != 0) {
-			printf("Directory not found: %s\n", args[1]);
-			fflush(stdout);
-		}
+	// Handle the cd built in command
+	// Change dir to HOME environment variable if user doesn't specify directory
+	int chdirStatus = (args[1] == NULL) ? chdir(getenv("HOME")) : chdir(args[1]);
+
+	if (chdirStatus != 0) {
+		printf("Directory not found: %s\n", (args[1] == NULL) ? getenv("HOME") : args[1]);
+		fflush(stdout);
 	}
 }
