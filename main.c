@@ -3,6 +3,7 @@
 #include <string.h>
 #include <unistd.h> 
 #include <sys/wait.h>
+#include <fcntl.h>
 
 // Constant global variables
 #define MAX_ARG_LENGTH 2048
@@ -10,6 +11,7 @@
 
 // Prototypes
 enum programState;
+struct redirectFlag;
 struct command;
 void getArguments(char* userInput);
 struct command parseArguments(char* args);
@@ -22,10 +24,15 @@ enum programState {
 	Exit
 };
 
+struct redirectFlag {
+	_Bool isInArgument;
+	int argumentPosition; // Index within the arguments array that the redirect is at
+};
+
 struct command {
 	char** arguments;
-	_Bool isInput;
-	_Bool isOutput;
+	struct redirectFlag inputFlag;
+	struct redirectFlag outputFlag;
 };
 
 int main() {
@@ -59,18 +66,22 @@ struct command parseArguments(char* args) {
 	int counter = 0;
 
 	struct command cmd;
-	cmd.isInput = 0;
-	cmd.isOutput = 0;
+	cmd.inputFlag.isInArgument = 0;
+	cmd.outputFlag.isInArgument = 0;
 
 	char* token = strtok_r(args, " ", &savePtr);
 	while (token != NULL) {
 		argsArray[counter] = token;
 
 		// Check if input or output arguments were passed to the command
-		if (strcmp(token, ">") == 0)
-			cmd.isOutput = 1;
-		else if (strcmp(token, "<") == 0)
-			cmd.isInput = 1;
+		if (strcmp(token, ">") == 0) {
+			cmd.outputFlag.isInArgument = 1;
+			cmd.outputFlag.argumentPosition = counter;
+		}
+		else if (strcmp(token, "<") == 0) {
+			cmd.inputFlag.isInArgument = 1;
+			cmd.inputFlag.argumentPosition = counter;
+		}
 
 		counter++;
 		token = strtok_r(NULL, " ", &savePtr);
@@ -117,6 +128,7 @@ void executeCd(char** args) {
 void executeNonBuiltInCommand(struct command cmd) {
 	// Fork new process
 	int childStatus;
+	int fileDescriptor;
 	pid_t spawnPid = fork(); 
 	switch (spawnPid) {
 		case -1:
@@ -126,6 +138,27 @@ void executeNonBuiltInCommand(struct command cmd) {
 			break;
 		case 0:
 			// In the child process
+			// First check if input/output redirection is present
+			if (cmd.inputFlag.isInArgument) {
+
+			}
+			else if (cmd.outputFlag.isInArgument) {
+				fileDescriptor = open(cmd.arguments[cmd.outputFlag.argumentPosition + 1], O_WRONLY | O_CREAT | O_TRUNC, 0640);
+				if (fileDescriptor == -1) {
+					perror("open()");
+					exit(2);
+				}
+				else {
+					int result = dup2(fileDescriptor, 1);
+					if (result == -1) {
+						perror("dup2");
+						exit(2);
+					}
+					cmd.arguments[cmd.outputFlag.argumentPosition] = NULL; // Prevent the redirect flag from being passed as an argument during exec
+					close(fileDescriptor);
+				}
+			}
+
 			execvp(cmd.arguments[0], cmd.arguments); // Use execvp per suggestion from instructions
 			perror("execv"); // exec will only return if there's an error
 			exit(2);
