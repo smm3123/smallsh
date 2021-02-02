@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h> 
 
 // Constant global variables
 #define MAX_ARG_LENGTH 2048
@@ -8,9 +9,10 @@
 
 // Prototypes
 enum programState;
-void getArguments(char* args);
-enum programState executeInput(char* args);
+void getArguments(char* userInput);
 char** parseArguments(char* args);
+enum programState executeInput(char** args);
+void executeCd(char** args);
 
 enum programState {
 	Okay,
@@ -24,31 +26,20 @@ int main() {
 		printf(": ");
 		fflush(stdout);
 
-		// Get user input
-		char args[MAX_ARG_LENGTH];
-		getArguments(args);
-		char** argsArray = parseArguments(args);
+		// Get user input and parse arguments
+		char userInput[MAX_ARG_LENGTH];
+		getArguments(userInput);
+		char** args = parseArguments(userInput);
 
 		state = executeInput(args);
 	}
 	return 0;
 }
 
-void getArguments(char* args) {
+void getArguments(char* userInput) {
 	// Get input and remove trailing new line
-	fgets(args, MAX_ARG_LENGTH, stdin);
-	args[strlen(args) - 1] = '\0';
-}
-
-enum programState executeInput(char* args) {
-	// Check if argument is null or comment
-	// If the first character in the arg is '#', it's considered a comment - midline comments not within scope of project
-	if ((args == NULL || strcmp(args, "") == 0) || args[0] == '#')
-		return Okay;
-	else if (strcmp(args, "exit") == 0)
-		return Exit;
-	else
-		return Okay;
+	fgets(userInput, MAX_ARG_LENGTH, stdin);
+	userInput[strlen(userInput) - 1] = '\0';
 }
 
 char** parseArguments(char* args) {
@@ -65,4 +56,32 @@ char** parseArguments(char* args) {
 
 	argsArray[counter] = NULL; // Last array index will be NULL for iteration purposes
 	return argsArray;
+}
+
+enum programState executeInput(char** args) {
+	// Check if argument is null or comment
+	// If the first character in the arg is '#', it's considered a comment - midline comments not within scope of project
+	if ((args[0] == NULL || strcmp(args[0], "") == 0) || args[0][0] == '#')
+		return Okay;
+	else if (strcmp(args[0], "exit") == 0)
+		return Exit;
+	else if (strcmp(args[0], "cd") == 0) {
+		executeCd(args);
+		return Okay;
+	}
+
+	else
+		return Okay;
+}
+
+void executeCd(char** args) {
+	if (args[1] == NULL)
+		chdir(getenv("HOME")); // Change to dir specified in HOME environment variable
+	else {
+		int chdirStatus = chdir(args[1]); // Change dir to value entered by user
+		if (chdirStatus != 0) {
+			printf("Directory not found: %s\n", args[1]);
+			fflush(stdout);
+		}
+	}
 }
