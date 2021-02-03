@@ -4,9 +4,10 @@
 #include <unistd.h> 
 #include <sys/wait.h>
 #include <fcntl.h>
+#include <stdbool.h>
 
 // Constant global variables
-#define MAX_ARG_LENGTH 2048
+#define MAX_CMD_LENGTH 2048
 #define MAX_ARGS 512
 
 // Prototypes
@@ -15,11 +16,12 @@ struct redirectFlag;
 struct command;
 void getArguments(char* userInput);
 struct command parseArguments(char* args);
-enum programState executeInput(struct command cmd);
+void replaceDollarSignsWithPID(char* str);
+enum programState executeCommand(struct command cmd);
 void executeCd(char** args);
 void executeNonBuiltInCommand(struct command cmd);
 void handleIORedirection(struct command cmd);
-void handleRedirection(struct command cmd, int oflag, int newFileDescriptor, _Bool isInput);
+void handleRedirection(struct command cmd, int oflag, int newFileDescriptor, bool isInput);
 
 // Structs & enums
 enum programState {
@@ -28,7 +30,7 @@ enum programState {
 };
 
 struct redirectFlag {
-	_Bool isInArgument;
+	bool isInArgument;
 	int argumentPosition; // Index within the arguments array that the redirect is at
 };
 
@@ -46,31 +48,31 @@ int main() {
 		fflush(stdout);
 
 		// Get user input and parse arguments
-		char userInput[MAX_ARG_LENGTH];
+		char userInput[MAX_CMD_LENGTH];
 		getArguments(userInput);
 		struct command cmd = parseArguments(userInput);
 
 		// Execute the command and arguments
-		state = executeInput(cmd);
+		state = executeCommand(cmd);
 	}
 	return 0;
 }
 
 void getArguments(char* userInput) {
 	// Get input and remove trailing new line
-	fgets(userInput, MAX_ARG_LENGTH, stdin);
+	fgets(userInput, MAX_CMD_LENGTH, stdin);
 	userInput[strlen(userInput) - 1] = '\0';
 }
 
 struct command parseArguments(char* args) {
 	// Stores each argument passed in by the user in an array index and returns the array
-	char** argsArray = malloc(MAX_ARG_LENGTH * sizeof(char*));
+	char** argsArray = malloc(MAX_CMD_LENGTH * sizeof(char*));
 	char* savePtr;
 	int counter = 0;
 
 	struct command cmd;
-	cmd.inputFlag.isInArgument = 0;
-	cmd.outputFlag.isInArgument = 0;
+	cmd.inputFlag.isInArgument = false;
+	cmd.outputFlag.isInArgument = false;
 
 	char* token = strtok_r(args, " ", &savePtr);
 	while (token != NULL) {
@@ -78,12 +80,19 @@ struct command parseArguments(char* args) {
 
 		// Check if input or output arguments were passed to the command
 		if (strcmp(token, ">") == 0) {
-			cmd.outputFlag.isInArgument = 1;
+			cmd.outputFlag.isInArgument = true;
 			cmd.outputFlag.argumentPosition = counter;
 		}
 		else if (strcmp(token, "<") == 0) {
-			cmd.inputFlag.isInArgument = 1;
+			cmd.inputFlag.isInArgument = true;
 			cmd.inputFlag.argumentPosition = counter;
+		}
+		// Check and replace $$ within the token with PID
+		else if (strstr(token, "$$") != NULL) {
+			char temp[1024];
+			strcpy(temp, token);
+			replaceDollarSignsWithPID(temp);
+			argsArray[counter] = temp; // Replace token with new string
 		}
 
 		counter++;
@@ -92,10 +101,30 @@ struct command parseArguments(char* args) {
 
 	argsArray[counter] = NULL; // Last array index will be NULL for iteration purposes
 	cmd.arguments = argsArray;
+	free(argsArray);
 	return cmd;
 }
 
-enum programState executeInput(struct command cmd) {
+void replaceDollarSignsWithPID(char* str) {
+	// Replace all instances of $$ with process ID and return result
+	char buffer[1024];
+	char needle[3] = "$$\0";
+	char pid[16];
+	char* p;
+
+	sprintf(pid, "%d", getpid()); // Convert pid to a string
+
+	while ((p = strstr(str, needle))) {
+		strncpy(buffer, str, p - str);
+		buffer[p - str] = '\0';
+		strcat(buffer, pid);
+		strcat(buffer, p + strlen(needle));
+		strcpy(str, buffer);
+		p++;
+	}
+}
+
+enum programState executeCommand(struct command cmd) {
 	// Checks the command the user inputted and handles what to execute accordingly
 
 	// Check if argument is null or comment
@@ -155,14 +184,14 @@ void executeNonBuiltInCommand(struct command cmd) {
 void handleIORedirection(struct command cmd) {
 	// Handle input redirection
 	if (cmd.inputFlag.isInArgument)
-		handleRedirection(cmd, O_RDONLY, STDIN_FILENO, 1);
+		handleRedirection(cmd, O_RDONLY, STDIN_FILENO, true);
 
 	// Handle output redirection
 	if (cmd.outputFlag.isInArgument)
-		handleRedirection(cmd, O_WRONLY | O_CREAT | O_TRUNC, STDOUT_FILENO, 0);
+		handleRedirection(cmd, O_WRONLY | O_CREAT | O_TRUNC, STDOUT_FILENO, false);
 }
 
-void handleRedirection(struct command cmd, int oflag, int newFileDescriptor, _Bool isInput) {
+void handleRedirection(struct command cmd, int oflag, int newFileDescriptor, bool isInput) {
 	int index = isInput ? cmd.inputFlag.argumentPosition : cmd.outputFlag.argumentPosition;
 	int fileDescriptor = open(cmd.arguments[index + 1], oflag, 0640);
 	if (fileDescriptor == -1) {
