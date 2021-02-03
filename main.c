@@ -38,6 +38,7 @@ struct command {
 	char** arguments;
 	struct redirectFlag inputFlag;
 	struct redirectFlag outputFlag;
+	bool isBackgroundProcess;
 };
 
 int main() {
@@ -70,10 +71,13 @@ struct command parseArguments(char* args) {
 	char* savePtr;
 	int counter = 0;
 
+	// Initialize command
 	struct command cmd;
 	cmd.inputFlag.isInArgument = false;
 	cmd.outputFlag.isInArgument = false;
+	cmd.isBackgroundProcess = false;
 
+	// Parse arguments into argsArray
 	char* token = strtok_r(args, " ", &savePtr);
 	while (token != NULL) {
 		argsArray[counter] = token;
@@ -99,13 +103,20 @@ struct command parseArguments(char* args) {
 		token = strtok_r(NULL, " ", &savePtr);
 	}
 
-	argsArray[counter] = NULL; // Last array index will be NULL for iteration purposes
+	// Check if command specifies if it's a background process
+	if (strcmp(argsArray[counter - 1], "&") == 0) {
+		cmd.isBackgroundProcess = true;
+		argsArray[counter - 1] = NULL; // Remove ampersand so it isn't passed as an argument
+	}
+
+	argsArray[counter] = NULL; // Last array index will be NULL so an empty argument isn't passed
 	cmd.arguments = argsArray;
 	free(argsArray);
 	return cmd;
 }
 
 void replaceDollarSignsWithPID(char* str) {
+	// Variable expansion functionality
 	// Replace all instances of $$ with process ID and return result
 	char buffer[1024];
 	char needle[3] = "$$\0";
