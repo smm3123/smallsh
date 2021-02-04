@@ -9,20 +9,24 @@
 // Constant global variables
 #define MAX_CMD_LENGTH 2048
 #define MAX_ARGS 512
+#define MAX_BACKGROUND_PROCESSES 256 // No more than 256 background processes will be running
 
 // Prototypes
 enum programState;
 struct redirectFlag;
 struct command;
+void checkBackgroundProcessStatus(int backgroundPIDs[]);
 void getArguments(char* userInput);
 struct command parseArgumentsAndGetCommand(char* args);
 void replaceDollarSignsWithPID(char* str);
-enum programState executeCommand(struct command cmd, int* terminationStatus);
+enum programState executeCommand(struct command cmd, int* terminationStatus, int backgroundPIDs[]);
 void executeCd(char** args);
 void executeStatus(int status);
-void executeNonBuiltInCommand(struct command cmd, int* termninationStatus);
+void executeNonBuiltInCommand(struct command cmd, int* termninationStatus, int backgroundPIDs[]);
 void handleIORedirection(struct command cmd);
 void handleRedirection(struct command cmd, int oflag, int newFileDescriptor, bool isInput);
+void addBackgroundPID(int backgroundPIDs[], int pid);
+void removeBackgroundPID(int backgroundPIDs[], int pid);
 
 // Structs & enums
 enum programState {
@@ -45,6 +49,7 @@ struct command {
 int main() {
 	enum programState state = Okay;
 	int terminationStatus;
+	int backgroundPIDs[MAX_BACKGROUND_PROCESSES] = { [0 ... (MAX_BACKGROUND_PROCESSES - 1)] = -1 }; // gcc compiler specific, -1 represents empty index since PID can be 0
 	while (state == Okay) {
 		// Print and flush output buffer
 		printf(": ");
@@ -56,9 +61,27 @@ int main() {
 		struct command cmd = parseArgumentsAndGetCommand(userInput);
 
 		// Execute the command and arguments
-		state = executeCommand(cmd, &terminationStatus);
+		state = executeCommand(cmd, &terminationStatus, backgroundPIDs);
+
+		// Check to see if background processes have finished running
+		checkBackgroundProcessStatus(backgroundPIDs);
 	}
 	return 0;
+}
+
+void checkBackgroundProcessStatus(int backgroundPIDs[]) {
+	int status;
+	int pid = 0;
+	do {
+		pid = waitpid(-1, &status, WNOHANG); // WNOHANG makes waitpid non-blocking
+		if (pid > 0) {
+			if (WIFEXITED(status)) {
+				printf("background pid %d is done: exit value %d\n", pid, WEXITSTATUS(status));
+				fflush(stdout);
+			}
+			removeBackgroundPID(backgroundPIDs, pid);
+		}
+	} while (pid > 0);
 }
 
 void getArguments(char* userInput) {
@@ -104,9 +127,9 @@ struct command parseArgumentsAndGetCommand(char* args) {
 		counter++;
 		token = strtok_r(NULL, " ", &savePtr);
 	}
-
+	
 	// Check if command specifies if it's a background process
-	if (strcmp(argsArray[counter - 1], "&") == 0) {
+	if (counter > 0 && strcmp(argsArray[counter - 1], "&") == 0) {
 		cmd.isBackgroundProcess = true;
 		argsArray[counter - 1] = NULL; // Remove ampersand so it isn't passed as an argument
 	}
@@ -137,7 +160,7 @@ void replaceDollarSignsWithPID(char* str) {
 	}
 }
 
-enum programState executeCommand(struct command cmd, int* terminationStatus) {
+enum programState executeCommand(struct command cmd, int* terminationStatus, int backgroundPIDs[]) {
 	// Checks the command the user inputted and handles what to execute accordingly
 
 	// Check if argument is null or comment
@@ -148,18 +171,15 @@ enum programState executeCommand(struct command cmd, int* terminationStatus) {
 	else if (strcmp(cmd.arguments[0], "exit") == 0)
 		return Exit;
 	// cd built-in command
-	else if (strcmp(cmd.arguments[0], "cd") == 0) {
+	else if (strcmp(cmd.arguments[0], "cd") == 0)
 		executeCd(cmd.arguments);
-		return Okay;
-	}
 	// status built-in command
-	else if (strcmp(cmd.arguments[0], "status") == 0) {
+	else if (strcmp(cmd.arguments[0], "status") == 0)
 		executeStatus(*terminationStatus);
-	}
-	else {
-		executeNonBuiltInCommand(cmd, terminationStatus);
-		return Okay;
-	}
+	else
+		executeNonBuiltInCommand(cmd, terminationStatus, backgroundPIDs);
+
+	return Okay;
 }
 
 void executeCd(char** args) {
@@ -181,7 +201,7 @@ void executeStatus(int status) {
 	}
 }
 
-void executeNonBuiltInCommand(struct command cmd, int* terminationStatus) {
+void executeNonBuiltInCommand(struct command cmd, int* terminationStatus, int backgroundPIDs[]) {
 	// Fork new process
 	pid_t spawnPid = fork(); 
 	switch (spawnPid) {
@@ -199,7 +219,13 @@ void executeNonBuiltInCommand(struct command cmd, int* terminationStatus) {
 			break;
 		default:
 			// In the parent process
-			spawnPid = waitpid(spawnPid, terminationStatus, 0);
+			if (!cmd.isBackgroundProcess)
+				spawnPid = waitpid(spawnPid, terminationStatus, 0);
+			else {
+				addBackgroundPID(backgroundPIDs, spawnPid);
+				printf("background pid is %d\n", spawnPid);
+				fflush(stdout);
+			}
 			break;
 	}
 }
@@ -230,5 +256,25 @@ void handleRedirection(struct command cmd, int oflag, int newFileDescriptor, boo
 		}
 		cmd.arguments[index] = NULL; // Prevent the redirect flag from being passed as an argument during command execution
 		close(fileDescriptor);
+	}
+}
+
+void addBackgroundPID(int backgroundPIDs[], int pid) {
+	// Add background PID to first empty index in the array
+	for (int i = 0; i < MAX_BACKGROUND_PROCESSES; i++) {
+		if (backgroundPIDs[i] == -1) {
+			backgroundPIDs[i] = pid;
+			break;
+		}
+	}
+}
+
+void removeBackgroundPID(int backgroundPIDs[], int pid) {
+	// Replace PID with -1 to indicate empty index
+	for (int i = 0; i < MAX_BACKGROUND_PROCESSES; i++) {
+		if (backgroundPIDs[i] == pid) {
+			backgroundPIDs[i] = -1;
+			break;
+		}
 	}
 }
