@@ -15,11 +15,12 @@ enum programState;
 struct redirectFlag;
 struct command;
 void getArguments(char* userInput);
-struct command parseArguments(char* args);
+struct command parseArgumentsAndGetCommand(char* args);
 void replaceDollarSignsWithPID(char* str);
-enum programState executeCommand(struct command cmd);
+enum programState executeCommand(struct command cmd, int* terminationStatus);
 void executeCd(char** args);
-void executeNonBuiltInCommand(struct command cmd);
+void executeStatus(int status);
+void executeNonBuiltInCommand(struct command cmd, int* termninationStatus);
 void handleIORedirection(struct command cmd);
 void handleRedirection(struct command cmd, int oflag, int newFileDescriptor, bool isInput);
 
@@ -43,6 +44,7 @@ struct command {
 
 int main() {
 	enum programState state = Okay;
+	int terminationStatus;
 	while (state == Okay) {
 		// Print and flush output buffer
 		printf(": ");
@@ -51,10 +53,10 @@ int main() {
 		// Get user input and parse arguments
 		char userInput[MAX_CMD_LENGTH];
 		getArguments(userInput);
-		struct command cmd = parseArguments(userInput);
+		struct command cmd = parseArgumentsAndGetCommand(userInput);
 
 		// Execute the command and arguments
-		state = executeCommand(cmd);
+		state = executeCommand(cmd, &terminationStatus);
 	}
 	return 0;
 }
@@ -65,7 +67,7 @@ void getArguments(char* userInput) {
 	userInput[strlen(userInput) - 1] = '\0';
 }
 
-struct command parseArguments(char* args) {
+struct command parseArgumentsAndGetCommand(char* args) {
 	// Stores each argument passed in by the user in an array index and returns the array
 	char** argsArray = malloc(MAX_CMD_LENGTH * sizeof(char*));
 	char* savePtr;
@@ -135,7 +137,7 @@ void replaceDollarSignsWithPID(char* str) {
 	}
 }
 
-enum programState executeCommand(struct command cmd) {
+enum programState executeCommand(struct command cmd, int* terminationStatus) {
 	// Checks the command the user inputted and handles what to execute accordingly
 
 	// Check if argument is null or comment
@@ -150,8 +152,12 @@ enum programState executeCommand(struct command cmd) {
 		executeCd(cmd.arguments);
 		return Okay;
 	}
+	// status built-in command
+	else if (strcmp(cmd.arguments[0], "status") == 0) {
+		executeStatus(*terminationStatus);
+	}
 	else {
-		executeNonBuiltInCommand(cmd);
+		executeNonBuiltInCommand(cmd, terminationStatus);
 		return Okay;
 	}
 }
@@ -168,9 +174,15 @@ void executeCd(char** args) {
 	}
 }
 
-void executeNonBuiltInCommand(struct command cmd) {
+void executeStatus(int status) {
+	if (WIFEXITED(status)) {
+		printf("exit value %d\n", WEXITSTATUS(status));
+		fflush(stdout);
+	}
+}
+
+void executeNonBuiltInCommand(struct command cmd, int* terminationStatus) {
 	// Fork new process
-	int childStatus;
 	pid_t spawnPid = fork(); 
 	switch (spawnPid) {
 		case -1:
@@ -187,7 +199,7 @@ void executeNonBuiltInCommand(struct command cmd) {
 			break;
 		default:
 			// In the parent process
-			spawnPid = waitpid(spawnPid, &childStatus, 0);
+			spawnPid = waitpid(spawnPid, terminationStatus, 0);
 			break;
 	}
 }
