@@ -27,6 +27,7 @@ void handleIORedirection(struct command cmd);
 void handleRedirection(struct command cmd, int oflag, int newFileDescriptor, bool isInput);
 void addBackgroundPID(int backgroundPIDs[], int pid);
 void removeBackgroundPID(int backgroundPIDs[], int pid);
+void killBackgroundProcesses(int backgroundPIDs[]);
 
 // Structs & enums
 enum programState {
@@ -50,6 +51,7 @@ int main() {
 	enum programState state = Okay;
 	int terminationStatus;
 	int backgroundPIDs[MAX_BACKGROUND_PROCESSES] = { [0 ... (MAX_BACKGROUND_PROCESSES - 1)] = -1 }; // gcc compiler specific, -1 represents empty index since PID can be 0
+
 	while (state == Okay) {
 		// Print and flush output buffer
 		printf(": ");
@@ -66,15 +68,19 @@ int main() {
 		// Check to see if background processes have finished running
 		checkBackgroundProcessStatus(backgroundPIDs);
 	}
+
 	return 0;
 }
 
 void checkBackgroundProcessStatus(int backgroundPIDs[]) {
+	// Checks if any background processes are still running
 	int status;
 	int pid = 0;
+
+	// Keep looping until there are no more background processes that have ended
 	do {
 		pid = waitpid(-1, &status, WNOHANG); // WNOHANG makes waitpid non-blocking
-		if (pid > 0) {
+		if (pid > 0) { // If background process has ended
 			if (WIFEXITED(status)) {
 				printf("background pid %d is done: exit value %d\n", pid, WEXITSTATUS(status));
 				fflush(stdout);
@@ -107,7 +113,7 @@ struct command parseArgumentsAndGetCommand(char* args) {
 	while (token != NULL) {
 		argsArray[counter] = token;
 
-		// Check if input or output arguments were passed to the command
+		// Check if input or output redirection arguments were passed to the command
 		if (strcmp(token, ">") == 0) {
 			cmd.outputFlag.isInArgument = true;
 			cmd.outputFlag.argumentPosition = counter;
@@ -150,6 +156,7 @@ void replaceDollarSignsWithPID(char* str) {
 
 	sprintf(pid, "%d", getpid()); // Convert pid to a string
 
+	// Create new string with replaced values into buffer and then copy values back to the inputted string
 	while ((p = strstr(str, needle))) {
 		strncpy(buffer, str, p - str);
 		buffer[p - str] = '\0';
@@ -168,14 +175,17 @@ enum programState executeCommand(struct command cmd, int* terminationStatus, int
 	if ((cmd.arguments[0] == NULL || strcmp(cmd.arguments[0], "") == 0) || cmd.arguments[0][0] == '#')
 		return Okay;
 	// exit built-in command
-	else if (strcmp(cmd.arguments[0], "exit") == 0)
+	else if (strcmp(cmd.arguments[0], "exit") == 0) {
+		killBackgroundProcesses(backgroundPIDs); // Kill background processes that are still running
 		return Exit;
+	}
 	// cd built-in command
 	else if (strcmp(cmd.arguments[0], "cd") == 0)
 		executeCd(cmd.arguments);
 	// status built-in command
 	else if (strcmp(cmd.arguments[0], "status") == 0)
 		executeStatus(*terminationStatus);
+	// Run any other command
 	else
 		executeNonBuiltInCommand(cmd, terminationStatus, backgroundPIDs);
 
@@ -195,6 +205,7 @@ void executeCd(char** args) {
 }
 
 void executeStatus(int status) {
+	// Print the exit value of the last run non-built-in command
 	if (WIFEXITED(status)) {
 		printf("exit value %d\n", WEXITSTATUS(status));
 		fflush(stdout);
@@ -212,16 +223,17 @@ void executeNonBuiltInCommand(struct command cmd, int* terminationStatus, int ba
 			break;
 		case 0:
 			// In the child process
-			handleIORedirection(cmd);
+			handleIORedirection(cmd); // Determine if there's any input/output redirection and handle it
 			execvp(cmd.arguments[0], cmd.arguments); // Use execvp per suggestion from instructions
 			perror("execv"); // exec will only return if there's an error
-			exit(2);
+			exit(1);
 			break;
 		default:
 			// In the parent process
 			if (!cmd.isBackgroundProcess)
 				spawnPid = waitpid(spawnPid, terminationStatus, 0);
 			else {
+				// If background process, add PID to array of background PIDs & print PID
 				addBackgroundPID(backgroundPIDs, spawnPid);
 				printf("background pid is %d\n", spawnPid);
 				fflush(stdout);
@@ -241,18 +253,22 @@ void handleIORedirection(struct command cmd) {
 }
 
 void handleRedirection(struct command cmd, int oflag, int newFileDescriptor, bool isInput) {
+	// Use ternary operator to determine whether the redirection is for input or output
 	int index = isInput ? cmd.inputFlag.argumentPosition : cmd.outputFlag.argumentPosition;
 	int fileDescriptor = open(cmd.arguments[index + 1], oflag, 0640);
+
+
 	if (fileDescriptor == -1) {
+		// Error with opening file descriptor
 		printf("cannot %s %s for %s\n", isInput ? "open" : "create", cmd.arguments[index + 1], isInput ? "input" : "output");
 		fflush(stdout);
-		exit(2);
+		exit(1);
 	}
 	else {
 		int result = dup2(fileDescriptor, newFileDescriptor);
 		if (result == -1) {
 			perror("dup2");
-			exit(2);
+			exit(1);
 		}
 		cmd.arguments[index] = NULL; // Prevent the redirect flag from being passed as an argument during command execution
 		close(fileDescriptor);
@@ -275,6 +291,15 @@ void removeBackgroundPID(int backgroundPIDs[], int pid) {
 		if (backgroundPIDs[i] == pid) {
 			backgroundPIDs[i] = -1;
 			break;
+		}
+	}
+}
+
+void killBackgroundProcesses(int backgroundPIDs[]) {
+	// Iterate through background processes and kill any that are still running
+	for (int i = 0; i < MAX_BACKGROUND_PROCESSES; i++) {
+		if (backgroundPIDs[i] != -1) {
+			kill(backgroundPIDs[i], SIGTERM); // Terminate the process
 		}
 	}
 }
