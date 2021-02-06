@@ -5,26 +5,32 @@
 #include <sys/wait.h>
 #include <fcntl.h>
 #include <stdbool.h>
+#include <signal.h>
 
 // Constant global variables
 #define MAX_CMD_LENGTH 2048
 #define MAX_ARGS 512
 #define MAX_BACKGROUND_PROCESSES 256 // No more than 256 background processes will be running
 
+bool isForegroundOnlyMode = false; // Foreground only mode set as global variable since signal handling itself is a global operation
+
 // Prototypes
 enum programState;
+struct shell;
 struct redirectFlag;
 struct command;
-void checkBackgroundProcessStatus(int backgroundPIDs[]);
+struct shell* initShell();
+void toggleForegroundOnlyMode(int signo);
 void getArguments(char* userInput);
 struct command parseArgumentsAndGetCommand(char* args);
 void replaceDollarSignsWithPID(char* str);
-enum programState executeCommand(struct command cmd, int* terminationStatus, int backgroundPIDs[]);
+enum programState executeCommand(struct command cmd, int* terminationStatus, struct shell* shell);
 void executeCd(char** args);
 void executeStatus(int status);
-void executeNonBuiltInCommand(struct command cmd, int* termninationStatus, int backgroundPIDs[]);
+void executeNonBuiltInCommand(struct command cmd, int* termninationStatus, struct shell* shell);
 void handleIORedirection(struct command cmd);
 void handleRedirection(struct command cmd, int oflag, int newFileDescriptor, bool isInput);
+void checkBackgroundProcessStatus(int backgroundPIDs[]);
 void addBackgroundPID(int backgroundPIDs[], int pid);
 void removeBackgroundPID(int backgroundPIDs[], int pid);
 void killBackgroundProcesses(int backgroundPIDs[]);
@@ -33,6 +39,13 @@ void killBackgroundProcesses(int backgroundPIDs[]);
 enum programState {
 	Okay,
 	Exit
+};
+
+// Represents the shell state
+struct shell {
+	struct sigaction sigint;
+	struct sigaction sigtstp;
+	int* backgroundPIDs; // Will be array of size MAX_BACKGROUND_PROCESSES
 };
 
 struct redirectFlag {
@@ -49,8 +62,8 @@ struct command {
 
 int main() {
 	enum programState state = Okay;
-	int terminationStatus;
-	int backgroundPIDs[MAX_BACKGROUND_PROCESSES] = { [0 ... (MAX_BACKGROUND_PROCESSES - 1)] = -1 }; // gcc compiler specific, -1 represents empty index since PID can be 0
+	int terminationStatus = 0;
+	struct shell* shell = initShell();
 
 	while (state == Okay) {
 		// Print and flush output buffer
@@ -63,31 +76,57 @@ int main() {
 		struct command cmd = parseArgumentsAndGetCommand(userInput);
 
 		// Execute the command and arguments
-		state = executeCommand(cmd, &terminationStatus, backgroundPIDs);
+		state = executeCommand(cmd, &terminationStatus, shell);
 
 		// Check to see if background processes have finished running
-		checkBackgroundProcessStatus(backgroundPIDs);
+		checkBackgroundProcessStatus(shell->backgroundPIDs);
 	}
 
 	return 0;
 }
 
-void checkBackgroundProcessStatus(int backgroundPIDs[]) {
-	// Checks if any background processes are still running
-	int status;
-	int pid = 0;
+struct shell* initShell() {
+	// Creates shell struct with default
+	struct shell* shell = malloc(sizeof(struct shell));
 
-	// Keep looping until there are no more background processes that have ended
-	do {
-		pid = waitpid(-1, &status, WNOHANG); // WNOHANG makes waitpid non-blocking
-		if (pid > 0) { // If background process has ended
-			if (WIFEXITED(status)) {
-				printf("background pid %d is done: exit value %d\n", pid, WEXITSTATUS(status));
-				fflush(stdout);
-			}
-			removeBackgroundPID(backgroundPIDs, pid);
-		}
-	} while (pid > 0);
+	// Set all indexes equal to -1
+	shell->backgroundPIDs = malloc(MAX_BACKGROUND_PROCESSES * sizeof(int));
+	for (int i = 0; i < MAX_BACKGROUND_PROCESSES; i++) {
+		shell->backgroundPIDs[i] = -1; // Since PIDs can range from 0 - 99999, set each empty index to -1
+	}
+
+	// Ignore SIGINT signal which is sent through ctrl+C
+	shell->sigint.sa_handler = SIG_IGN;
+	sigaction(SIGINT, &shell->sigint, NULL);
+
+	// Use SIGTSTP (ctrl+Z) signal to toggle foreground only mode
+	shell->sigtstp.sa_handler = toggleForegroundOnlyMode;
+	sigfillset(&shell->sigtstp.sa_mask);
+	shell->sigtstp.sa_flags = SA_RESTART;
+	sigaction(SIGTSTP, &shell->sigtstp, NULL);
+
+	return shell;
+}
+
+void toggleForegroundOnlyMode(int signo) {
+	// Print relevant message, using write since printf is not reentrant
+	if (isForegroundOnlyMode) {
+		char* exitMsg = "\nExiting foreground-only mode\n";
+		write(STDOUT_FILENO, exitMsg, 30);
+		fflush(stdout);
+	}
+	else {
+		char* enterMsg = "\nEntering foreground-only mode (& is now ignored)\n";
+		write(STDOUT_FILENO, enterMsg, 50);
+		fflush(stdout);
+	}
+
+	// Toggle isForegroundOnlyMode
+	isForegroundOnlyMode = !isForegroundOnlyMode;
+
+	// Print input prompt again
+	printf(": "); 
+	fflush(stdout);
 }
 
 void getArguments(char* userInput) {
@@ -124,7 +163,7 @@ struct command parseArgumentsAndGetCommand(char* args) {
 		}
 		// Check and replace $$ within the token with PID
 		else if (strstr(token, "$$") != NULL) {
-			char temp[1024];
+			char temp[1024]; // create temp to prevent token from being altered 
 			strcpy(temp, token);
 			replaceDollarSignsWithPID(temp);
 			argsArray[counter] = temp; // Replace token with new string
@@ -136,7 +175,8 @@ struct command parseArgumentsAndGetCommand(char* args) {
 	
 	// Check if command specifies if it's a background process
 	if (counter > 0 && strcmp(argsArray[counter - 1], "&") == 0) {
-		cmd.isBackgroundProcess = true;
+		if (!isForegroundOnlyMode)
+			cmd.isBackgroundProcess = true;
 		argsArray[counter - 1] = NULL; // Remove ampersand so it isn't passed as an argument
 	}
 
@@ -162,12 +202,12 @@ void replaceDollarSignsWithPID(char* str) {
 		buffer[p - str] = '\0';
 		strcat(buffer, pid);
 		strcat(buffer, p + strlen(needle));
-		strcpy(str, buffer);
+		strcpy(str, buffer); // Copy value back to original string
 		p++;
 	}
 }
 
-enum programState executeCommand(struct command cmd, int* terminationStatus, int backgroundPIDs[]) {
+enum programState executeCommand(struct command cmd, int* terminationStatus, struct shell* shell) {
 	// Checks the command the user inputted and handles what to execute accordingly
 
 	// Check if argument is null or comment
@@ -176,7 +216,7 @@ enum programState executeCommand(struct command cmd, int* terminationStatus, int
 		return Okay;
 	// exit built-in command
 	else if (strcmp(cmd.arguments[0], "exit") == 0) {
-		killBackgroundProcesses(backgroundPIDs); // Kill background processes that are still running
+		killBackgroundProcesses(shell->backgroundPIDs); // Kill background processes that are still running
 		return Exit;
 	}
 	// cd built-in command
@@ -187,7 +227,7 @@ enum programState executeCommand(struct command cmd, int* terminationStatus, int
 		executeStatus(*terminationStatus);
 	// Run any other command
 	else
-		executeNonBuiltInCommand(cmd, terminationStatus, backgroundPIDs);
+		executeNonBuiltInCommand(cmd, terminationStatus, shell);
 
 	return Okay;
 }
@@ -212,7 +252,7 @@ void executeStatus(int status) {
 	}
 }
 
-void executeNonBuiltInCommand(struct command cmd, int* terminationStatus, int backgroundPIDs[]) {
+void executeNonBuiltInCommand(struct command cmd, int* terminationStatus, struct shell* shell) {
 	// Fork new process
 	pid_t spawnPid = fork(); 
 	switch (spawnPid) {
@@ -223,6 +263,10 @@ void executeNonBuiltInCommand(struct command cmd, int* terminationStatus, int ba
 			break;
 		case 0:
 			// In the child process
+			// Set ctrl+C signal back to default for child process running in foreground
+			shell->sigint.sa_handler = SIG_DFL; 
+			sigaction(SIGINT, &shell->sigint, NULL);
+
 			handleIORedirection(cmd); // Determine if there's any input/output redirection and handle it
 			execvp(cmd.arguments[0], cmd.arguments); // Use execvp per suggestion from instructions
 			perror("execv"); // exec will only return if there's an error
@@ -234,7 +278,7 @@ void executeNonBuiltInCommand(struct command cmd, int* terminationStatus, int ba
 				spawnPid = waitpid(spawnPid, terminationStatus, 0);
 			else {
 				// If background process, add PID to array of background PIDs & print PID
-				addBackgroundPID(backgroundPIDs, spawnPid);
+				addBackgroundPID(shell->backgroundPIDs, spawnPid);
 				printf("background pid is %d\n", spawnPid);
 				fflush(stdout);
 			}
@@ -255,12 +299,13 @@ void handleIORedirection(struct command cmd) {
 void handleRedirection(struct command cmd, int oflag, int newFileDescriptor, bool isInput) {
 	// Use ternary operator to determine whether the redirection is for input or output
 	int index = isInput ? cmd.inputFlag.argumentPosition : cmd.outputFlag.argumentPosition;
-	int fileDescriptor = open(cmd.arguments[index + 1], oflag, 0640);
+	char* file = cmd.isBackgroundProcess ? "/dev/null" : cmd.arguments[index + 1]; // If background process, redirect to /dev/null
+	int fileDescriptor = open(file, oflag, 0640);
 
 
 	if (fileDescriptor == -1) {
 		// Error with opening file descriptor
-		printf("cannot %s %s for %s\n", isInput ? "open" : "create", cmd.arguments[index + 1], isInput ? "input" : "output");
+		printf("cannot %s %s for %s\n", isInput ? "open" : "create", file, isInput ? "input" : "output");
 		fflush(stdout);
 		exit(1);
 	}
@@ -273,6 +318,30 @@ void handleRedirection(struct command cmd, int oflag, int newFileDescriptor, boo
 		cmd.arguments[index] = NULL; // Prevent the redirect flag from being passed as an argument during command execution
 		close(fileDescriptor);
 	}
+}
+
+void checkBackgroundProcessStatus(int backgroundPIDs[]) {
+	// Checks if any background processes are still running
+	int status;
+	int pid = 0;
+
+	// Keep looping until there are no more background processes that have ended
+	do {
+		pid = waitpid(-1, &status, WNOHANG); // WNOHANG makes waitpid non-blocking
+		// If background process has ended
+		if (pid > 0) { 
+			// Background process exited
+			if (WIFEXITED(status)) { 
+				printf("background pid %d is done: exit value %d\n", pid, WEXITSTATUS(status));
+				fflush(stdout);
+			}
+			// Background process terminated
+			else {
+				printf("background pid %d is done: terminated by signal %d\n", pid, WTERMSIG(status));
+			}
+			removeBackgroundPID(backgroundPIDs, pid);
+		}
+	} while (pid > 0);
 }
 
 void addBackgroundPID(int backgroundPIDs[], int pid) {
@@ -300,6 +369,7 @@ void killBackgroundProcesses(int backgroundPIDs[]) {
 	for (int i = 0; i < MAX_BACKGROUND_PROCESSES; i++) {
 		if (backgroundPIDs[i] != -1) {
 			kill(backgroundPIDs[i], SIGTERM); // Terminate the process
+			free(&backgroundPIDs[i]); // Free from memory
 		}
 	}
 }
