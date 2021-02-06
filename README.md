@@ -88,10 +88,10 @@ background pid 4941 is done: terminated by signal 15
 /nfs/stak/users/chaudhrn/CS344/prog3
 : cd
 : pwd
-/nfs/stak/users/chaudhrn
+/nfs/stak/users/mahdisy
 : cd CS344
 : pwd
-/nfs/stak/users/chaudhrn/CS344
+/nfs/stak/users/mahdisy/CS344
 : echo 4867
 4867
 : echo $$
