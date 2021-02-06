@@ -85,7 +85,7 @@ background pid is 4941
 : kill -15 4941
 background pid 4941 is done: terminated by signal 15
 : pwd
-/nfs/stak/users/chaudhrn/CS344/prog3
+/nfs/stak/users/mahdisy/CS344/smallsh
 : cd
 : pwd
 /nfs/stak/users/mahdisy
