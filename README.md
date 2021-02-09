@@ -41,7 +41,9 @@ SIGTSTP is sent through the ctrl+Z command from the keyboard. Any child processe
 ## Sample Execution
 Here is an example of how smallsh is run:
 
-```$ smallsh
+```
+$ gcc --std=gnu99 -o smallsh main.c
+$ ./smallsh
 : ls
 junk   smallsh    smallsh.c
 : ls > junk
